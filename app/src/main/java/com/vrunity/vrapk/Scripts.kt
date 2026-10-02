@@ -272,7 +272,7 @@ class Scripts {
         return out
     }
 
-    private class Parser(val tokens: ArrayList<Token>) {
+    private inner class Parser(val tokens: ArrayList<Token>) {
         var pos = 0
 
         fun atEnd(): Boolean = peek().kind == KIND_END
@@ -1192,7 +1192,7 @@ class Scripts {
                     if (lo == Math.floor(lo.toDouble()).toFloat() && hi == Math.floor(hi.toDouble()).toFloat()) {
                         val span = hi - lo
                         if (span <= 0f) return lo
-                        return lo + Math.floor(random.nextFloat() * span)
+                        return lo + Math.floor((random.nextFloat() * span).toDouble()).toFloat()
                     }
                     return lo + random.nextFloat() * (hi - lo)
                 }
@@ -1279,9 +1279,9 @@ class Scripts {
             if (at >= 0 && target.target is Get) {
                 val holder = eval(target.target as Get, scope, run)
                 if (holder is FloatArray) {
-                    val copy = floatArrayOf(holder[0] if (holder.size > 0) else 0f,
-                        holder[1] if (holder.size > 1) else 0f,
-                        holder[2] if (holder.size > 2) else 0f,
+                    val copy = floatArrayOf(if (holder.size > 0) holder[0] else 0f,
+                        if (holder.size > 1) holder[1] else 0f,
+                        if (holder.size > 2) holder[2] else 0f,
                         if (holder.size > 3) holder[3] else 1f)
                     copy[at] = number(next)
                     return assign(target.target as Get, "=", if (at == 3) copy else floatArrayOf(copy[0], copy[1], copy[2]), scope, run)
@@ -1338,26 +1338,26 @@ class Scripts {
 
     private fun vec(v: Any?): FloatArray = when (v) {
         is FloatArray -> floatArrayOf(
-            v[0] if (v.size > 0) else 0f,
-            v[1] if (v.size > 1) else 0f,
-            v[2] if (v.size > 2) else 0f)
+            if (v.size > 0) v[0] else 0f,
+            if (v.size > 1) v[1] else 0f,
+            if (v.size > 2) v[2] else 0f)
         is Handle -> world.position(v.index)
         else -> floatArrayOf(0f, 0f, 0f)
     }
 
     private fun vec3(v: Any?, z: Float): FloatArray = when (v) {
         is FloatArray -> floatArrayOf(
-            v[0] if (v.size > 0) else 0f,
-            v[1] if (v.size > 1) else 0f,
+            if (v.size > 0) v[0] else 0f,
+            if (v.size > 1) v[1] else 0f,
             if (v.size > 2) v[2] else z)
         else -> floatArrayOf(number(v), number(v), number(v))
     }
 
     private fun colorValue(v: Any?): FloatArray = when (v) {
         is FloatArray -> floatArrayOf(
-            clamp01(v[0] if (v.size > 0) else 1f),
-            clamp01(v[1] if (v.size > 1) else 1f),
-            clamp01(v[2] if (v.size > 2) else 1f),
+            clamp01(if (v.size > 0) v[0] else 1f),
+            clamp01(if (v.size > 1) v[1] else 1f),
+            clamp01(if (v.size > 2) v[2] else 1f),
             if (v.size > 3) clamp01(v[3]) else 1f)
         else -> floatArrayOf(1f, 1f, 1f, 1f)
     }
@@ -1395,9 +1395,9 @@ class Scripts {
     }
 
     private fun length(v: FloatArray): Float {
-        val x = v[0] if (v.size > 0) else 0f
-        val y = v[1] if (v.size > 1) else 0f
-        val z = v[2] if (v.size > 2) else 0f
+        val x = if (v.size > 0) v[0] else 0f
+        val y = if (v.size > 1) v[1] else 0f
+        val z = if (v.size > 2) v[2] else 0f
         return Math.hypot(Math.hypot(x.toDouble(), y.toDouble()), z.toDouble()).toFloat()
     }
 
