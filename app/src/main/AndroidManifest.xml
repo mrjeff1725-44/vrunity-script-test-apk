@@ -1,0 +1,35 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="org.khronos.openxr.permission.OPENXR_SYSTEM" />
+  <queries>
+    <provider android:authorities="org.khronos.openxr.runtime_broker;org.khronos.openxr.system_runtime_broker" />
+    <intent><action android:name="org.khronos.openxr.OpenXRRuntimeService" /></intent>
+    <intent><action android:name="org.khronos.openxr.OpenXRApiLayerService" /></intent>
+  </queries>
+  <uses-feature android:name="android.hardware.vr.headtracking" android:version="1" android:required="false" />
+  <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
+  <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
+  <application
+      android:label="Script Test"
+      android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+      android:hardwareAccelerated="true"
+      android:allowBackup="false">
+    <meta-data android:name="com.oculus.supportedDevices" android:value="quest|quest2|questpro|quest3|quest3s" />
+    <activity
+        android:name=".MainActivity"
+        android:exported="true"
+        android:screenOrientation="landscape"
+        android:launchMode="singleTask"
+        android:resizeableActivity="false"
+        android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|density|uiMode|smallestScreenSize">
+      <meta-data android:name="android.app.lib_name" android:value="vrxr" />
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+        <category android:name="com.oculus.intent.category.VR" />
+        <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
+        <category android:name="com.google.intent.category.CARDBOARD" />
+      </intent-filter>
+    </activity>
+    <activity android:name=".VrStartupErrorActivity" android:exported="false" android:excludeFromRecents="true" android:process=":vr_diagnostics" android:taskAffinity="com.vrunity.vrapk.diagnostics" />
+  </application>
+</manifest>
