@@ -13,7 +13,8 @@ import kotlin.math.tan
 // is what opens when the app starts on a headset.
 class XrSession(private val activity: Activity) {
     private val viewData = FloatArray(22)
-    private val stick = FloatArray(4)
+    // The two sticks, then each hand's trigger and grip.
+    private val stick = FloatArray(8)
     private val fbo = IntArray(2)
     private val depth = IntArray(2)
     private var fboW = 0
@@ -165,6 +166,8 @@ class XrSession(private val activity: Activity) {
         check(w > 0 && h > 0) { "The headset returned invalid eye dimensions." }
         if (fboW != w || fboH != h) targets(w, h)
         frameCount++
+        // The controllers are read once a frame, before the scene's scripts run.
+        game.setPads(stick)
         // A floor-relative space already reports the eyes at their real height. One
         // that is not floor-relative starts at the head, so the eyes are lifted to the
         // scene's own height instead of sitting on the ground.
