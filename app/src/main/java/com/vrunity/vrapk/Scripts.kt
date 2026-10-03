@@ -21,6 +21,9 @@ interface ScriptWorld {
     fun translate(index: Int, x: Float, y: Float, z: Float)
     fun turn(index: Int, x: Float, y: Float, z: Float)
     fun face(index: Int, x: Float, y: Float, z: Float)
+    // The controllers: a stick read as an axis, a trigger or grip read as a button.
+    fun axis(name: String): Float
+    fun held(name: String): Boolean
 }
 
 class Scripts {
@@ -45,9 +48,16 @@ class Scripts {
     private class Back(val value: Node?) : Node()
     private class Skip : Node()
     private class Stop(val why: String) : Node()
+    // break leaves the loop it is written in, or the switch it is written in, and
+    // continue goes on to the loop's next turn. They are kept apart from Stop, which
+    // ends the script — a break in a loop used to end the whole script.
+    private class Break : Node()
+    private class Continue : Node()
+    private class Branch(val value: Node, val body: Node)
+    private class Switch(val subject: Node, val cases: ArrayList<Branch>, val other: Node?) : Node()
 
     private class Method(val name: String, val params: ArrayList<String>, val body: Node)
-    private class Program(val fields: ArrayList<Node>, val methods: HashMap<String, Method>)
+    private class Program(val fields: ArrayList<Node>, val methods: HashMap<String, Method>, val enums: HashMap<String, HashMap<String, Float>>)
 
     private class Scope(val vars: HashMap<String, Any?>, val parent: Scope?) {
         fun get(name: String): Any? {
@@ -98,6 +108,10 @@ class Scripts {
     private var frames = 0
     private var steps = 0
     private val reported = HashSet<String>()
+    // What the controllers were doing at the last frame boundary, so a script can tell
+    // a button being pressed from a button being held.
+    private val padDown = HashMap<String, Boolean>()
+    private val padWas = HashMap<String, Boolean>()
 
     // The scripts the scene carries, each attached to the object it was written for.
     // A script that cannot be read is reported once and left out, so one bad script
@@ -137,6 +151,7 @@ class Scripts {
         dt = delta
         clock += delta
         frames++
+        refreshPads()
         val snapshot = ArrayList(runs)
         for (run in snapshot) {
             invoke(run, "Update")
@@ -180,6 +195,20 @@ class Scripts {
         reported.add(key)
         world.log("Script on " + run.name + ": " + text)
     }
+
+    // One reading of the controllers per frame: what is held now becomes what was held
+    // a moment ago, which is what tells a press from a hold.
+    private fun refreshPads() {
+        for (name in PAD_BUTTONS) {
+            val now = world.held(name)
+            padWas[name] = padDown[name] ?: now
+            padDown[name] = now
+        }
+    }
+
+    private fun pressedNow(name: String): Boolean = padDown[name] == true && padWas[name] != true
+
+    private fun releasedNow(name: String): Boolean = padDown[name] != true && padWas[name] == true
 
     // ---------- reading the script ----------
 
@@ -315,6 +344,9 @@ class Scripts {
         fun parseClass(): Program {
             val fields = ArrayList<Node>()
             val methods = HashMap<String, Method>()
+            // The enums the script declares: their members are the numbers a script
+            // works with, the way C# numbers them.
+            val enums = HashMap<String, HashMap<String, Float>>()
             var guard = 0
             while (!atEnd() && guard++ < 20000) {
                 if (isWord("class") || isWord("struct") || isWord("interface")) {
@@ -333,7 +365,7 @@ class Scripts {
                     continue
                 }
                 if (isWord("enum")) {
-                    skipEnum()
+                    parseEnum(enums)
                     continue
                 }
                 if (isWord("class") || isWord("struct")) {
@@ -344,7 +376,7 @@ class Scripts {
                 if (isMethodAhead()) parseMethod(methods)
                 else parseField(fields)
             }
-            return Program(fields, methods)
+            return Program(fields, methods, enums)
         }
 
         private fun skipToBodyBrace() {
@@ -362,16 +394,45 @@ class Scripts {
             }
         }
 
-        private fun skipEnum() {
+        // enum Mode { Idle, Walk = 4, Run } — the members are numbers, and one written
+        // without a value carries on from the one before it, exactly as in C#.
+        private fun parseEnum(into: HashMap<String, HashMap<String, Float>>) {
             pos++
+            var name = ""
             var guard = 0
-            while (!atEnd() && guard++ < 20000) {
-                if (isPunct("{")) {
-                    skipBalanced("{", "}")
-                    return
-                }
-                pos++
+            while (!atEnd() && !isPunct("{") && guard++ < 200) {
+                val t = next()
+                if (t.kind == KIND_WORD) name = t.text
             }
+            if (!isPunct("{")) return
+            pos++
+            val values = HashMap<String, Float>()
+            var running = 0f
+            guard = 0
+            while (!atEnd() && !isPunct("}") && guard++ < 2000) {
+                if (isPunct(",")) {
+                    pos++
+                    continue
+                }
+                if (peek().kind != KIND_WORD) {
+                    pos++
+                    continue
+                }
+                val member = next().text
+                var value = running
+                if (accept("=")) {
+                    var sign = 1f
+                    if (isPunct("-")) {
+                        pos++
+                        sign = -1f
+                    }
+                    if (peek().kind == KIND_NUM) value = next().num * sign
+                }
+                values[member] = value
+                running = value + 1f
+            }
+            accept("}")
+            if (name.isNotEmpty() && values.isNotEmpty()) into[name] = values
         }
 
         // A signature when a bracket comes before any '=' or ';'.
@@ -537,19 +598,62 @@ class Scripts {
             if (isWord("break")) {
                 pos++
                 accept(";")
-                return Stop("break") as Node
+                return Break()
             }
             if (isWord("continue")) {
                 pos++
                 accept(";")
-                return Stop("continue") as Node
+                return Continue()
             }
-            if (isWord("switch") || isWord("foreach") || isWord("do") || isWord("try") || isWord("using")) {
+            if (isWord("switch")) return switchStatement()
+            if (isWord("foreach") || isWord("do") || isWord("try") || isWord("using")) {
                 val word = peek().text
                 skipStatement()
                 return Stop(word + " is not read by the app's scripts yet")
             }
             return declOrExpr()
+        }
+
+        // switch (value) { case A: … break; default: … } — the statements from the
+        // matching label onwards are run, and a break leaves the switch.
+        private fun switchStatement(): Node {
+            pos++
+            accept("(")
+            val subject = expression()
+            accept(")")
+            accept("{")
+            val cases = ArrayList<Branch>()
+            var other: Node? = null
+            var guard = 0
+            while (!atEnd() && !isPunct("}") && guard++ < 4000) {
+                if (isWord("case")) {
+                    pos++
+                    val value = expression()
+                    accept(":")
+                    cases.add(Branch(value, Group(caseBody())))
+                    continue
+                }
+                if (isWord("default")) {
+                    pos++
+                    accept(":")
+                    other = Group(caseBody())
+                    continue
+                }
+                pos++
+            }
+            accept("}")
+            return Switch(subject, cases, other)
+        }
+
+        // Every statement under one label, up to the next label or the switch's end.
+        private fun caseBody(): ArrayList<Node> {
+            val body = ArrayList<Node>()
+            var guard = 0
+            while (!atEnd() && !isPunct("}") && guard++ < 4000) {
+                if (isWord("case") || isWord("default")) break
+                body.add(statement())
+            }
+            return body
         }
 
         private fun skipStatement() {
@@ -892,6 +996,31 @@ class Scripts {
             }
             return null
         }
+        if (node is Break) throw BreakSignal()
+        if (node is Continue) throw ContinueSignal()
+        if (node is Switch) {
+            val subject = eval(node.subject, scope, run)
+            var at = -1
+            for (i in node.cases.indices) {
+                if (same(subject, eval(node.cases[i].value, scope, run))) {
+                    at = i
+                    break
+                }
+            }
+            val inner = Scope(HashMap(), scope)
+            try {
+                if (at >= 0) {
+                    // From the matching label onwards, so an empty label falls into the
+                    // next one — and a break leaves the switch, as it does in C#.
+                    for (i in at until node.cases.size) eval(node.cases[i].body, inner, run)
+                } else if (node.other != null) {
+                    eval(node.other, inner, run)
+                }
+            } catch (b: BreakSignal) {
+                // break left the switch.
+            }
+            return null
+        }
         if (node is Back) throw ReturnSignal(if (node.value == null) null else eval(node.value, scope, run))
         if (node is Stop) throw Halt(node.why)
         return null
@@ -904,11 +1033,20 @@ class Scripts {
         if (word == "renderer" || word == "material") return if (run.item >= 0) Paint(run.item) else null
         if (word == "PI") return Math.PI.toFloat()
         if (NAMES.contains(word)) return Builtin(word)
+        // An enum the script declares itself: its members read as Type.Member.
+        if (run.program.enums.containsKey(word)) return Builtin("enum:" + word)
         return scope.get(word)
     }
 
     private fun read(target: Any?, name: String, run: Run): Any? {
         if (target is Builtin) {
+            if (target.space.startsWith("enum:")) {
+                val values = run.program.enums[target.space.substring(5)]
+                val value = values?.get(name)
+                if (value != null) return value
+                once(name + " is not a value of " + target.space.substring(5), run)
+                return null
+            }
             if (target.space == "Vector3") return vectorProp(name)
             if (target.space == "Vector2") return vectorProp(name)
             if (target.space == "Color") return colorProp(name)
@@ -1078,6 +1216,20 @@ class Scripts {
                 sb.append(text(args[k]))
             }
             world.log(sb.toString())
+            return null
+        }
+        // The headset's controllers: the two sticks as axes, and each hand's trigger
+        // and grip as buttons. On a device with no controllers every reading is zero,
+        // so the same script still runs.
+        if (space == "Input") {
+            when (name) {
+                "GetAxis", "GetAxisRaw" -> return world.axis(text(a0))
+                "GetButton", "GetKey" -> return world.held(text(a0))
+                "GetButtonDown", "GetKeyDown" -> return pressedNow(text(a0))
+                "GetButtonUp", "GetKeyUp" -> return releasedNow(text(a0))
+                "GetMouseButton", "GetMouseButtonDown", "GetMouseButtonUp" -> return false
+            }
+            once("Input." + name + "() is not in the app's scripts yet", run)
             return null
         }
         if (space == "Vector3" || space == "Vector2") {
@@ -1556,6 +1708,10 @@ class Scripts {
         private val MODIFIERS = HashSet(listOf(
             "public", "private", "protected", "internal", "static", "readonly", "const", "sealed", "override",
             "virtual", "abstract", "partial", "async", "extern", "volatile", "new", "unsafe", "in", "out", "ref"))
+
+        // The controller buttons read once a frame, so a script can tell a press from
+        // a hold.
+        private val PAD_BUTTONS = arrayOf("Trigger", "TriggerRight", "Grip", "GripRight", "Fire1", "Fire2", "Fire3")
 
         // The names that stand for something the game provides rather than a variable.
         private val NAMES = HashSet(listOf(
