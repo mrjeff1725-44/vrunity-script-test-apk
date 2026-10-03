@@ -35,6 +35,8 @@ static int32_t gSwapH = 0;
 static XrActionSet gActionSet = XR_NULL_HANDLE;
 static XrAction gMoveAction = XR_NULL_HANDLE;
 static XrAction gTurnAction = XR_NULL_HANDLE;
+static XrAction gTriggerAction = XR_NULL_HANDLE;
+static XrAction gGripAction = XR_NULL_HANDLE;
 static XrPath gHandPath[MAX_EYES];
 static XrPosef gEyePose[MAX_EYES];
 static XrFovf gEyeFov[MAX_EYES];
@@ -82,22 +84,35 @@ static XrPath pathOf(const char *s) {
     return p;
 }
 
-// Both sticks drive the same two actions, so whichever controller layout the
-// headset understands works: the left stick walks, the right stick turns.
+// The controllers: the left stick walks, the right stick turns, and each hand's
+// trigger and grip are buttons. Every profile gets the same actions, so whichever
+// controller layout the headset understands works.
 static void suggestProfile(const char *profile) {
     XrPath profilePath = pathOf(profile);
     if (profilePath == XR_NULL_PATH) return;
-    XrActionSuggestedBinding binds[MAX_EYES];
+    XrActionSuggestedBinding binds[6];
     binds[0].action = gMoveAction;
     binds[0].binding = pathOf("/user/hand/left/input/thumbstick");
     binds[1].action = gTurnAction;
     binds[1].binding = pathOf("/user/hand/right/input/thumbstick");
+    binds[2].action = gTriggerAction;
+    binds[2].binding = pathOf("/user/hand/left/input/trigger/value");
+    binds[3].action = gTriggerAction;
+    binds[3].binding = pathOf("/user/hand/right/input/trigger/value");
+    binds[4].action = gGripAction;
+    binds[4].binding = pathOf("/user/hand/left/input/squeeze/value");
+    binds[5].action = gGripAction;
+    binds[5].binding = pathOf("/user/hand/right/input/squeeze/value");
+    // The sticks are what the player walks with, so a profile that offers only those
+    // still binds — the buttons are added when the profile has them.
     if (binds[0].binding == XR_NULL_PATH || binds[1].binding == XR_NULL_PATH) return;
+    uint32_t count = 2;
+    if (binds[2].binding != XR_NULL_PATH && binds[3].binding != XR_NULL_PATH && binds[4].binding != XR_NULL_PATH && binds[5].binding != XR_NULL_PATH) count = 6;
     XrInteractionProfileSuggestedBinding sp;
     memset(&sp, 0, sizeof(sp));
     sp.type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING;
     sp.interactionProfile = profilePath;
-    sp.countSuggestedBindings = MAX_EYES;
+    sp.countSuggestedBindings = count;
     sp.suggestedBindings = binds;
     xrSuggestInteractionProfileBindings(gInstance, &sp);
 }
@@ -409,6 +424,14 @@ static int createSession(void) {
     strcpy(aci.actionName, "turn");
     strcpy(aci.localizedActionName, "Turn");
     if (XR_FAILED(xrCreateAction(gActionSet, &aci, &gTurnAction))) return 0;
+    // The triggers and grips are single values rather than sticks.
+    aci.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
+    strcpy(aci.actionName, "trigger");
+    strcpy(aci.localizedActionName, "Trigger");
+    if (XR_FAILED(xrCreateAction(gActionSet, &aci, &gTriggerAction))) return 0;
+    strcpy(aci.actionName, "grip");
+    strcpy(aci.localizedActionName, "Grip");
+    if (XR_FAILED(xrCreateAction(gActionSet, &aci, &gGripAction))) return 0;
 
     suggestProfile("/interaction_profiles/oculus/touch_controller");
     suggestProfile("/interaction_profiles/bytedance/pico4_controller");
@@ -528,6 +551,20 @@ static float stickAxis(XrAction action, XrPath sub, int axis) {
     return axis == 0 ? st.currentState.x : st.currentState.y;
 }
 
+static float floatAxis(XrAction action, XrPath sub) {
+    XrActionStateGetInfo gi;
+    memset(&gi, 0, sizeof(gi));
+    gi.type = XR_TYPE_ACTION_STATE_GET_INFO;
+    gi.action = action;
+    gi.subactionPath = sub;
+    XrActionStateFloat st;
+    memset(&st, 0, sizeof(st));
+    st.type = XR_TYPE_ACTION_STATE_FLOAT;
+    if (XR_FAILED(xrGetActionStateFloat(gSession, &gi, &st))) return 0.0f;
+    if (!st.isActive) return 0.0f;
+    return st.currentState;
+}
+
 static void teardown(void) {
     if (gSession != XR_NULL_HANDLE) {
         releaseImages();
@@ -547,6 +584,8 @@ static void teardown(void) {
         }
         gMoveAction = XR_NULL_HANDLE;
         gTurnAction = XR_NULL_HANDLE;
+        gTriggerAction = XR_NULL_HANDLE;
+        gGripAction = XR_NULL_HANDLE;
         xrDestroySession(gSession);
         gSession = XR_NULL_HANDLE;
     }
@@ -703,7 +742,7 @@ JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_poll(JNIEnv *env, jobject thiz,
 }
 
 JNIEXPORT void JNICALL Java_com_vrunity_vrapk_Xr_input(JNIEnv *env, jobject thiz, jfloatArray out) {
-    float values[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    float values[8] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
     if (gSession != XR_NULL_HANDLE && gActionSet != XR_NULL_HANDLE && gRunning) {
         XrActiveActionSet active;
         memset(&active, 0, sizeof(active));
@@ -719,6 +758,10 @@ JNIEXPORT void JNICALL Java_com_vrunity_vrapk_Xr_input(JNIEnv *env, jobject thiz
             values[1] = stickAxis(gMoveAction, gHandPath[0], 1);
             values[2] = stickAxis(gTurnAction, gHandPath[1], 0);
             values[3] = stickAxis(gTurnAction, gHandPath[1], 1);
+            values[4] = floatAxis(gTriggerAction, gHandPath[0]);
+            values[5] = floatAxis(gGripAction, gHandPath[0]);
+            values[6] = floatAxis(gTriggerAction, gHandPath[1]);
+            values[7] = floatAxis(gGripAction, gHandPath[1]);
         }
     }
     jfloat *jout = (*env)->GetFloatArrayElements(env, out, NULL);
