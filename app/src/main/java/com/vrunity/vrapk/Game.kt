@@ -74,6 +74,14 @@ class Game(context: Context) : LogicWorld {
     // The scene's scripts, run on the device itself.
     private val scripts = Scripts()
 
+    // What the controllers are doing: the two sticks, then each hand's trigger and
+    // grip. The headset's session fills these once a frame, before the scripts run.
+    private val pads = FloatArray(8)
+
+    fun setPads(values: FloatArray) {
+        for (i in 0 until Math.min(pads.size, values.size)) pads[i] = values[i]
+    }
+
     private val scripter = object : ScriptWorld {
         override fun log(text: String) {
             android.util.Log.i("VRUnityXR", "Script: " + text)
@@ -174,6 +182,32 @@ class Game(context: Context) : LogicWorld {
             val item = scene.items[index]
             item.rot[1] = Math.atan2((x - item.pos[0]).toDouble(), (z - item.pos[2]).toDouble()).toFloat()
             Scene.compose(item)
+        }
+
+        // What a script reads through Input: the left stick moves, the right stick
+        // turns, and each hand's trigger and grip are buttons.
+        override fun axis(name: String): Float {
+            when (name) {
+                "Horizontal", "LeftStickX", "Mouse X" -> return pads[0]
+                "Vertical", "LeftStickY", "Mouse Y" -> return pads[1]
+                "Turn", "RightStickX" -> return pads[2]
+                "RightStickY" -> return pads[3]
+                "Trigger", "Fire1" -> return pads[4]
+                "Grip", "Fire3" -> return pads[5]
+                "TriggerRight", "Fire2" -> return pads[6]
+                "GripRight" -> return pads[7]
+            }
+            return 0f
+        }
+
+        override fun held(name: String): Boolean {
+            when (name) {
+                "Trigger", "Fire1" -> return pads[4] > 0.5f
+                "Grip", "Fire3" -> return pads[5] > 0.5f
+                "TriggerRight", "Fire2" -> return pads[6] > 0.5f
+                "GripRight" -> return pads[7] > 0.5f
+            }
+            return false
         }
     }
 
